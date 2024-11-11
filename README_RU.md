@@ -1,5 +1,5 @@
 [English](/README.md)
-<p align="center"><a href="#"><img src="./media/3X-UI.png" alt="Image"></a></p>
+<p align="center"><a href="#"><img src="./media/marzban.png" alt="Image"></a></p>
 
 # MARZBAN-REVERSE-PROXY
 
