@@ -215,30 +215,14 @@ reality() {
     done
 }
 
-generate_key() {
-    local key_type="$1"
-    local key_prefix=""
-    local key=""
-
-    case "$key_type" in
-        "private")
-            key_prefix="privateKey"
-            # Генерация приватного ключа X25519 с использованием xray
-            key=$(/usr/local/x-ui/bin/xray-linux-amd64 x25519 | grep "Private key:" | awk '{print $3}')
-            ;;
-        "public")
-            key_prefix="publicKey"
-            # Генерация публичного ключа X25519 с использованием xray
-            key=$(/usr/local/x-ui/bin/xray-linux-amd64 x25519 | grep "Public key:" | awk '{print $3}')
-            ;;
-        *)
-            echo "Invalid key type. Use 'private' or 'public'."
-            return 1
-            ;;
-    esac
-
-    # Возвращаем ключ
-    echo "$key"
+generate_keys() {
+    # Генерация пары ключей X25519 с использованием xray
+    local key_pair=$(/usr/local/x-ui/bin/xray-linux-amd64 x25519)
+    local private_key=$(echo "$key_pair" | grep "Private key:" | awk '{print $3}')
+    local public_key=$(echo "$key_pair" | grep "Public key:" | awk '{print $3}')
+    
+    # Возвращаем ключи в виде строки, разделенной пробелом
+    echo "$private_key $public_key"
 }
 
 ### Проверка IP-адреса ###
@@ -283,7 +267,7 @@ start_installation() {
     msg_ok "ВНИМАНИЕ!"
     echo
     msg_ok "Перед запуском скрипта рекомендуется выполнить следующие действия:"
-    msg_err "apt update && apt full-upgrade -y && reboot"
+    msg_err "apt-get update && apt-get full-upgrade -y && reboot"
     echo
     msg_ok "Начать установку XRAY? Выберите опцию [y/N]"
     answer_input
@@ -305,22 +289,25 @@ data_entry() {
     echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo
-    msg_inf "Введите доменное имя, под которое будете маскироваться Reality:"
+    msg_inf "Введите sni для Reality:"
     reality
-    echo
-    msg_inf "Введите 2 доменное имя, под которое будете маскироваться Reality:"
-    read reality2
     echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo
-    msg_inf "Введите путь к grpc:"
+    msg_inf "Введите путь к Grpc:"
     validate_path cdngrpc
     echo
-    msg_inf "Введите путь к httpupgrade:"
-    validate_path cdnhttpupgrade
+    msg_inf "Введите путь к Split:"
+    validate_path cdnsplit
     echo
-    msg_inf "Введите путь к websocket:"
+    msg_inf "Введите путь к HttpUpgrade:"
+    validate_path cdnhttpu
+    echo
+    msg_inf "Введите путь к Websocket:"
     validate_path cdnws
+    echo
+    msg_inf "Введите путь к Node Exporter:"
+    validate_path node_metrics
     echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo
@@ -348,11 +335,6 @@ data_entry() {
         msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
         echo
     fi
-    msg_inf "Введите ключ для регистрации WARP или нажмите Enter для пропуска:"
-    read warpkey
-    echo
-    msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
-    echo
     webPort=$(port_issuance)
     subPort=$(port_issuance)
 
@@ -369,7 +351,6 @@ installation_of_utilities() {
     wget \
     sudo \
     zip \
-    nginx-full \
     net-tools \
     apache2-utils \
     gnupg2 \
@@ -389,15 +370,9 @@ installation_of_utilities() {
         echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/ubuntu `lsb_release -cs` nginx" | tee /etc/apt/sources.list.d/nginx.list
     fi
     echo -e "Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n" | tee /etc/apt/preferences.d/99nginx
-    apt install nginx-full -y
-
-    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(grep "VERSION_CODENAME=" /etc/os-release | cut -d "=" -f 2) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
-    apt-get update && apt-get install cloudflare-warp -y
-    wget https://pkg.cloudflareclient.com/pool/$(grep "VERSION_CODENAME=" /etc/os-release | cut -d "=" -f 2)/main/c/cloudflare-warp/cloudflare-warp_2024.6.497-1_amd64.deb > /dev/null 2>&1
-    dpkg -i cloudflare-warp_2024.6.497-1_amd64.deb
-
-    apt-get install -y systemd-resolved
+    
+    apt-get update && apt-get install -y nginx-full \
+    systemd-resolved
     echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo
@@ -508,7 +483,7 @@ add_user() {
 }
 
 ### Безопасность ###
-uattended_upgrade() {
+unattended_upgrade() {
     msg_inf "Автоматическое обновление безопасности"
     echo 'Unattended-Upgrade::Mail "root";' >> /etc/apt/apt.conf.d/50unattended-upgrades
     echo unattended-upgrades unattended-upgrades/enable_auto_updates boolean true | debconf-set-selections
@@ -561,19 +536,7 @@ disable_ipv6() {
 ### WARP ###
 warp() {
     msg_inf "Настройка warp"
-    echo -e "yes" | warp-cli --accept-tos registration new
-    warp-cli --accept-tos mode proxy
-    warp-cli --accept-tos proxy port 40000
-    warp-cli --accept-tos connect
-        if [[ -n "$warpkey" ]];
-    then
-        warp-cli --accept-tos registration license ${warpkey}
-    fi
-    mkdir /etc/systemd/system/warp-svc.service.d
-    echo "[Service]" >> /etc/systemd/system/warp-svc.service.d/override.conf
-    echo "LogLevelMax=3" >> /etc/systemd/system/warp-svc.service.d/override.conf
-    systemctl daemon-reload
-    systemctl restart warp-svc.service
+    bash <(curl -Ls https://github.com/cortez24rus/xui-reverse-proxy/raw/refs/heads/main/warp/xui-rp-warp.sh)
     echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo
@@ -605,6 +568,7 @@ nginx_setup() {
     msg_inf "Настройка NGINX"
     mkdir -p /etc/nginx/stream-enabled/
     touch /etc/nginx/.htpasswd
+    htpasswd -nb "$username" "$password" >> /etc/nginx/.htpasswd
 
     nginx_conf
     stream_conf
@@ -689,18 +653,15 @@ map \$ssl_preread_protocol \$backend {
     "" ssh;
 }
 map \$ssl_preread_server_name \$https {
-    cg.${domain}   cg;
-    ${reality}     reality;
-    ${reality2}    reality2;
-    www.${domain}  xtls;
     ${domain}      web;
+    ${reality}     reality;
+    www.${domain}  xtls;
 }
-upstream cg              { server 127.0.0.1:2053; }
-upstream reality         { server 127.0.0.1:7443; }
-upstream reality2        { server 127.0.0.1:8443; }
+upstream web             { server 127.0.0.1:7443; }
+#upstream web             { server 127.0.0.1:46076; }
+upstream reality         { server 127.0.0.1:8443; }
 upstream xtls            { server 127.0.0.1:9443; }
-upstream ssh             { server 127.0.0.1:36079; }
-upstream web             { server 127.0.0.1:46076; }
+#upstream ssh             { server 127.0.0.1:36079; }
 
 server {
     listen 443           reuseport;
@@ -729,7 +690,10 @@ server {
     ssl_session_cache           shared:SSL:10m;
 }
 server {
-    listen                      46076 ssl http2;
+#    listen                      46076 ssl http2;
+    listen                      46076 ssl http2 proxy_protocol;
+    set_real_ip_from            127.0.0.1;
+    real_ip_header              proxy_protocol;
     server_name                 ${domain} www.${domain};
 
     # SSL
@@ -768,25 +732,24 @@ server {
 #        auth_basic "Restricted Content";
 #        auth_basic_user_file /etc/nginx/.htpasswd;
 #    }
-     location /secret_node_metrics {
-        proxy_pass http://127.0.0.1:9100/metrics;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
+     location /${node_metrics} {
         auth_basic "Restricted Content";
         auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://127.0.0.1:9100/metrics;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
     location ~* /(sub|dashboard|api|docs|redoc|openapi.json|statics) {
         proxy_redirect off;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_pass https://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
     # X-ui Admin panel
     location /${webBasePath} {
@@ -819,6 +782,11 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_pass https://127.0.0.1:${subPort}/${subJsonPath};
         break;
+    }
+    location /${cdnsplit} {
+        proxy_pass http://127.0.0.1:2063;
+        proxy_http_version 1.1;
+        proxy_redirect off;
     }
     # Xray Config
     location ~ ^/(?<fwdport>\d+)/(?<fwdpath>.*)\$ {
@@ -860,18 +828,415 @@ random_site() {
     bash <(curl -Ls https://github.com/cortez24rus/xui-reverse-proxy/raw/refs/heads/main/xui-rp-random-site.sh)
 }
 
-### Установка marzban ###
+monitoring() {
+    bash <(curl -Ls https://github.com/cortez24rus/grafana-prometheus/raw/refs/heads/main/prometheus_node_exporter.sh)
+}
+
+### Установка 3x-ui ###
 panel_installation() {
     touch /usr/local/xui-rp/reinstallation_check
-    msg_inf "Настройка marzban xray"
-    
-    while ! wget -q --show-progress --timeout=30 --tries=10 --retry-connrefused https://github.com/cortez24rus/xui-reverse-proxy/raw/refs/heads/main/x-ui.gpg; do
+    msg_inf "Настройка 3x-ui xray"
+    while ! wget -q --show-progress --timeout=30 --tries=10 --retry-connrefused https://github.com/cortez24rus/xui-reverse-proxy/raw/refs/heads/main/other/x-ui.gpg; do
         msg_err "Скачивание не удалось, пробуем снова..."
         sleep 3
     done
     echo ${password} | gpg --batch --yes --passphrase-fd 0 -d x-ui.gpg > x-ui.db
     echo -e "n" | bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) > /dev/null 2>&1
 
+    stream_settings_grpc
+    stream_settings_split
+    stream_settings_httpu
+    stream_settings_ws
+    stream_settings_steal
+    stream_settings_reality
+    stream_settings_xtls
+    stream_settings_mkcp
+    database_change
+
+    x-ui stop
+    
+    rm -rf x-ui.gpg
+    [ -f /etc/x-ui/x-ui.db ] && mv /etc/x-ui/x-ui.db /etc/x-ui/x-ui.db.backup
+    mv x-ui.db /etc/x-ui/
+    
+    x-ui start
+    echo -e "20\n1" | x-ui > /dev/null 2>&1
+    echo
+    msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
+    echo
+}
+
+### Изменение базы данных ###
+stream_settings_grpc() {
+    stream_settings_grpc=$(cat <<EOF
+{
+  "network": "grpc",
+  "security": "none",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "grpcSettings": {
+    "serviceName": "/2053/${cdngrpc}",
+    "authority": "${domain}",
+    "multiMode": false
+  }
+}
+EOF
+)
+}
+
+stream_settings_split() {
+    stream_settings_split=$(cat <<EOF
+{
+  "network": "splithttp",
+  "security": "none",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "splithttpSettings": {
+    "path": "/${cdnsplit}",
+    "host": "",
+    "headers": {},
+    "scMaxConcurrentPosts": "100-200",
+    "scMaxEachPostBytes": "1000000-2000000",
+    "scMinPostsIntervalMs": "10-50",
+    "noSSEHeader": false,
+    "xPaddingBytes": "100-1000",
+    "xmux": {
+      "maxConcurrency": "16-32",
+      "maxConnections": 0,
+      "cMaxReuseTimes": "64-128",
+      "cMaxLifetimeMs": 0
+    }
+  }
+}
+EOF
+)
+}
+
+stream_settings_httpu() {
+    stream_settings_httpu=$(cat <<EOF
+{
+  "network": "httpupgrade",
+  "security": "tls",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "tlsSettings": {
+    "serverName": "",
+    "minVersion": "1.2",
+    "maxVersion": "1.3",
+    "cipherSuites": "",
+    "rejectUnknownSni": false,
+    "disableSystemRoot": false,
+    "enableSessionResumption": false,
+    "certificates": [
+      {
+        "certificateFile": "${webCertFile}",
+        "keyFile": "${webKeyFile}",
+        "ocspStapling": 3600,
+        "oneTimeLoading": false,
+        "usage": "encipherment",
+        "buildChain": false
+      }
+    ],
+    "alpn": [],
+    "settings": {
+      "allowInsecure": false,
+      "fingerprint": "randomized"
+    }
+  },
+  "httpupgradeSettings": {
+    "acceptProxyProtocol": false,
+    "path": "/2073/${cdnhttpu}",
+    "host": "${domain}",
+    "headers": {}
+  }
+}
+EOF
+)
+}
+
+stream_settings_ws() {
+    stream_settings_ws=$(cat <<EOF
+{
+  "network": "ws",
+  "security": "tls",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "tlsSettings": {
+    "serverName": "${domain}",
+    "minVersion": "1.2",
+    "maxVersion": "1.3",
+    "cipherSuites": "",
+    "rejectUnknownSni": false,
+    "disableSystemRoot": false,
+    "enableSessionResumption": false,
+    "certificates": [
+      {
+        "certificateFile": "${webCertFile}",
+        "keyFile": "${webKeyFile}",
+        "ocspStapling": 3600,
+        "oneTimeLoading": false,
+        "usage": "encipherment",
+        "buildChain": false
+      }
+    ],
+    "alpn": [],
+    "settings": {
+      "allowInsecure": false,
+      "fingerprint": "randomized"
+    }
+  },
+  "wsSettings": {
+    "acceptProxyProtocol": false,
+    "path": "/2083/${cdnws}",
+    "host": "${domain}",
+    "headers": {}
+  }
+}
+EOF
+)
+}
+
+stream_settings_steal() {
+    read private_key public_key <<< "$(generate_keys)"
+
+    stream_settings_steal=$(cat <<EOF
+{
+  "network": "tcp",
+  "security": "reality",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "www.${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "realitySettings": {
+    "show": false,
+    "xver": 2,
+    "dest": "46076",
+    "serverNames": [
+      "${domain}"
+    ],
+    "privateKey": "${private_key}",
+    "minClient": "",
+    "maxClient": "",
+    "maxTimediff": 0,
+    "shortIds": [
+      "22dff0",
+      "0041e9ca",
+      "49afaa139d",
+      "89",
+      "1addf92cc1bd50",
+      "6e122954e9df",
+      "8d93026df5de065c",
+      "bc85"
+    ],
+    "settings": {
+      "publicKey": "${public_key}",
+      "fingerprint": "randomized",
+      "serverName": "",
+      "spiderX": "/"
+    }
+  },
+  "tcpSettings": {
+    "acceptProxyProtocol": false,
+    "header": {
+      "type": "none"
+    }
+  }
+}
+EOF
+)
+}
+
+stream_settings_reality() {
+    read private_key public_key <<< "$(generate_keys)"
+
+    stream_settings_reality=$(cat <<EOF
+{
+  "network": "tcp",
+  "security": "reality",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "www.${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "realitySettings": {
+    "show": false,
+    "xver": 2,
+    "dest": "${reality}:443",
+    "serverNames": [
+      "${reality}"
+    ],
+    "privateKey": "${private_key}",
+    "minClient": "",
+    "maxClient": "",
+    "maxTimediff": 0,
+    "shortIds": [
+      "cd95c9",
+      "eeed8008",
+      "f2e26eba6c9432cf",
+      "0d6a8b47988f0d",
+      "c1",
+      "1b60e7369779",
+      "7fb9d5f9d8",
+      "6696"
+    ],
+    "settings": {
+      "publicKey": "${public_key}",
+      "fingerprint": "randomized",
+      "serverName": "",
+      "spiderX": "/"
+    }
+  },
+  "tcpSettings": {
+    "acceptProxyProtocol": false,
+    "header": {
+      "type": "none"
+    }
+  }
+}
+EOF
+)
+}
+
+stream_settings_xtls() {
+    stream_settings_xtls=$(cat <<EOF
+{
+  "network": "tcp",
+  "security": "tls",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "www.${domain}",
+      "port": 443,
+      "remark": ""
+    }
+  ],
+  "tlsSettings": {
+    "serverName": "www.${domain}",
+    "minVersion": "1.3",
+    "maxVersion": "1.3",
+    "cipherSuites": "",
+    "rejectUnknownSni": false,
+    "disableSystemRoot": false,
+    "enableSessionResumption": false,
+    "certificates": [
+      {
+        "certificateFile": "${webCertFile}",
+        "keyFile": "${webKeyFile}",
+        "ocspStapling": 3600,
+        "oneTimeLoading": false,
+        "usage": "encipherment",
+        "buildChain": false
+      }
+    ],
+    "alpn": [
+      "http/1.1"
+    ],
+    "settings": {
+      "allowInsecure": false,
+      "fingerprint": "randomized"
+    }
+  },
+  "tcpSettings": {
+    "acceptProxyProtocol": false,
+    "header": {
+      "type": "none"
+    }
+  }
+}
+EOF
+)
+}
+
+stream_settings_mkcp() {
+    stream_settings_mkcp=$(cat <<EOF
+{
+  "network": "kcp",
+  "security": "none",
+  "externalProxy": [
+    {
+      "forceTls": "same",
+      "dest": "www.${domain}",
+      "port": 9999,
+      "remark": ""
+    }
+  ],
+  "kcpSettings": {
+    "mtu": 1350,
+    "tti": 20,
+    "uplinkCapacity": 50,
+    "downlinkCapacity": 100,
+    "congestion": false,
+    "readBufferSize": 1,
+    "writeBufferSize": 1,
+    "header": {
+      "type": "srtp"
+    },
+    "seed": "iTsaMjully"
+  }
+}
+EOF
+)
+}
+
+database_change() {
+    DB_PATH="x-ui.db"
+
+    sqlite3 $DB_PATH <<EOF
+UPDATE users SET username = '$username' WHERE id = 1;
+UPDATE users SET password = '$password' WHERE id = 1;
+
+UPDATE inbounds SET stream_settings = '$stream_settings_grpc' WHERE remark LIKE '%gRPC%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_split' WHERE remark LIKE '%Split%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_httpu' WHERE remark LIKE '%HttpU%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_ws' WHERE remark LIKE '%WS%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_steal' WHERE remark LIKE '%Steal%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_reality' WHERE remark LIKE '%Whatsapp%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_xtls' WHERE remark LIKE '%XTLS%' COLLATE NOCASE;
+UPDATE inbounds SET stream_settings = '$stream_settings_mkcp' WHERE remark LIKE '%MKCP%' COLLATE NOCASE;
+
+UPDATE settings SET value = '${webPort}' WHERE key = 'webPort';
+UPDATE settings SET value = '/${webBasePath}/' WHERE key = 'webBasePath';
+UPDATE settings SET value = '${webCertFile}' WHERE key = 'webCertFile';
+UPDATE settings SET value = '${webKeyFile}' WHERE key = 'webKeyFile';
+UPDATE settings SET value = '${subPort}' WHERE key = 'subPort';
+UPDATE settings SET value = '/${subPath}/' WHERE key = 'subPath';
+UPDATE settings SET value = '${webCertFile}' WHERE key = 'subCertFile';
+UPDATE settings SET value = '${webKeyFile}' WHERE key = 'subKeyFile';
+UPDATE settings SET value = '${subURI}' WHERE key = 'subURI';
+UPDATE settings SET value = '/${subJsonPath}/' WHERE key = 'subJsonPath';
+UPDATE settings SET value = '${subJsonURI}' WHERE key = 'subJsonURI';
+EOF
 }
 
 ### UFW ###
@@ -972,6 +1337,7 @@ data_output() {
     printf '0\n' | x-ui | grep --color=never -i ':'
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo -n "Доступ по ссылке к 3x-ui панели: " && msg_out "https://${domain}/${webBasePath}/"
+    echo -n "Быстрая ссылка, на подписку, для подключения: " && msg_out "${subURI}user"
     if [[ $choise = "1" ]]; then
         echo -n "Доступ по ссылке к adguard-home: " && msg_out "https://${domain}/${adguardPath}/login.html"
     fi
@@ -980,11 +1346,8 @@ data_output() {
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo -n "Username: " && msg_out "$username"
     echo -n "Password: " && msg_out "$password"
-    echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
-    echo
     echo -n "Путь к лог файлу: " && msg_out "$LOGFILE"
-    echo
     msg_tilda "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
     echo
 }
@@ -1004,11 +1367,12 @@ main_script_first() {
     installation_of_utilities
     dns_encryption
     add_user
-    uattended_upgrade
+    unattended_upgrade
     enable_bbr
     disable_ipv6
     warp
     issuance_of_certificates
+    monitoring
     nginx_setup
     panel_installation
     enabling_security
